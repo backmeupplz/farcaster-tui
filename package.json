@@ -4,7 +4,7 @@
   "description": "A terminal-based Farcaster client",
   "type": "module",
   "bin": {
-    "farcaster-tui": "bin/cli.js"
+    "farcaster-tui": "bin/cli.cjs"
   },
   "scripts": {
     "start": "bun src/index.tsx",
