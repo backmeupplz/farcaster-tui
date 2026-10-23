@@ -139,6 +139,16 @@ bun run build
 ./farcaster-tui
 ```
 
+## Releasing
+
+Bump `version` in `package.json`, then push a `v*` tag to [git.borodutch.com](https://git.borodutch.com/backmeupplz/farcaster-tui):
+
+```bash
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+Forgejo Actions (`.forgejo/workflows/publish.yml`) publishes to npm, builds the Linux and macOS binaries and creates the release with them on GitHub and on Forgejo.
+
 ## Tech Stack
 
 - [Bun](https://bun.sh) — runtime

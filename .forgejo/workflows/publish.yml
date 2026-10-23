@@ -1,0 +1,79 @@
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bunx tsc --noEmit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  build-binary:
+    strategy:
+      matrix:
+        include:
+          - target: linux-x64
+          - target: darwin-arm64
+    # bun cross-compiles, so both build on Linux; the Mac's uplink is too slow for artifact uploads
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun build src/index.tsx --compile --target=bun-${{ matrix.target }} --external react-devtools-core --outfile farcaster-tui-${{ matrix.target }}
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: farcaster-tui-${{ matrix.target }}
+          path: farcaster-tui-${{ matrix.target }}
+
+  # Releases don't mirror: create the release with the binaries on GitHub (what
+  # users download) and on Forgejo
+  release:
+    needs: build-binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://code.forgejo.org/forgejo/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub and Forgejo releases
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+          FJ_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # The tag reaches the GitHub mirror within seconds; wait for it rather than letting GitHub create one
+          for i in $(seq 30); do gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1 && break; sleep 10; done
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$REPO" --clobber *
+          else
+            gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --notes "" *
+          fi
+          API="${{ github.server_url }}/api/v1/repos/$REPO/releases"
+          # a tag push creates no Forgejo release, so create it unless someone already did
+          ID=$(curl -sS -H "Authorization: token $FJ_TOKEN" "$API/tags/$TAG" | jq -r '.id // empty')
+          if [ -z "$ID" ]; then
+            ID=$(jq -n --arg t "$TAG" '{tag_name: $t, name: $t}' |
+              curl -fsS -H "Authorization: token $FJ_TOKEN" -H "Content-Type: application/json" -d @- "$API" | jq -er .id)
+          fi
+          for f in *; do
+            curl -fsS -o /dev/null -H "Authorization: token $FJ_TOKEN" -F "attachment=@$f" "$API/$ID/assets?name=$f"
+          done
